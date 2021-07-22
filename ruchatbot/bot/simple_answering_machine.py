@@ -1294,8 +1294,9 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
                             continue
 
                         # 10.06.2021 подавим не всегда нормальные реплики с "а ты"
-                        if 'а ты?' in rtext or 'а ты ?' in rtext:
-                            continue
+                        for bad in ['а ты', 'а у тебя']:
+                            if bad+'?' in rtext or bad+' ?' in rtext:
+                                continue
 
                         # Проверим, что такая реплика еще не использовалась в этой сессии.
                         if self.bot_replica_already_uttered(bot, session, rtext):

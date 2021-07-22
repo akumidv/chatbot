@@ -8113,14 +8113,6 @@ story_rules:
             - "У меня нет телефона"
 
 
-    - story_rule:
-        name: "rule_builder[болтовня_331]"
-        if:
-            text: "привет , незнакомец !"
-        then:
-            say:
-            - "Я скорее незнакомка"
-
 
     - story_rule:
         name: "rule_builder[болтовня_332]"
@@ -19174,7 +19166,6 @@ story_rules:
             text: "а кто тут ?"
         then:
             say:
-            - "Я чатбот"
             - "Тут есть я"
             - "Я, жду твоих вопросов"
 

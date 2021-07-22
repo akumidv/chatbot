@@ -19,7 +19,7 @@ class BotProfile(object):
         return path_str.replace('$DATA', data_dir).replace('$MODELS', models_dir)
 
     def load(self, profile_path, data_dir, models_dir):
-        with open(profile_path, 'r') as f:
+        with open(profile_path, 'r', encoding='utf8') as f:
             self.profile = json.load(f)
 
         # Файлы с фактами (База Знаний)

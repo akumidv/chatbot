@@ -1,19 +1,23 @@
 """
-Модель для генерации фактов, подходящих в кеч-ве предпосылок для указанного вопроса.
+Модель для генерации реплик в чит-чате
 Часть пайплайна чатбота https://github.com/Koziev/chatbot
 """
 
 import logging.handlers
 
-#import torch
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
 
-class RugptPremiseConfabulator:
+class RugptChitChat:
     def __init__(self):
         self.device = "cpu"  # "cuda" #torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
         self.tokenizer = None
         self.model = None
+        self.logger = logging.getLogger('RugptChitChat')
+        self.temperature = 0.9
+        self.beam_k = 10
+        self.beam_p = 0.9
+        self.repetition_penalty = 1.0
 
     def load(self, model_name_or_path):
         self.device = "cpu"  # "cuda" #torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
@@ -22,14 +26,16 @@ class RugptPremiseConfabulator:
         self.model.to(self.device)
 
     def generate_output(self, context, num_return_sequences=10):
-        temperature = 0.9
-        beam_k = 10
-        beam_p = 0.9
-        repetition_penalty = 1.0
-        #prompt_text = '<s>' + context + ' #'
-        prompt_text = context + ' #'
+        self.logger.debug('Generating chit-chat response with context=%s', context)
+
+        nspaces = context.count(' ')
+        if nspaces == 0:
+            # По однословным контекстам не будем генерировать отклик.
+            return []
+
+        prompt_text = context + ' |'
         stop_token = "</s>"
-        length = 100
+        length = 80
 
         encoded_prompt = self.tokenizer.encode(prompt_text, add_special_tokens=False, return_tensors="pt")
         encoded_prompt = encoded_prompt.to(self.device)
@@ -37,13 +43,13 @@ class RugptPremiseConfabulator:
         output_sequences = self.model.generate(
             input_ids=encoded_prompt,
             max_length=length + len(encoded_prompt[0]),
-            temperature=temperature,
-            top_k=beam_k,
-            top_p=beam_p,
-            repetition_penalty=repetition_penalty,
+            temperature=self.temperature,
+            top_k=self.beam_k,
+            top_p=self.beam_p,
+            repetition_penalty=self.repetition_penalty,
             do_sample=True,
             num_return_sequences=num_return_sequences,
-            pad_token_id=50256, # ой нехорошо, но ворнинг достал
+            pad_token_id=50256,  # ой нехорошо, но ворнинг достал
         )
 
         # Remove the batch dimension when returning multiple sequences
@@ -73,6 +79,7 @@ class RugptPremiseConfabulator:
                 generated_sequences.add(total_sequence)
             #print(total_sequence)
 
+        self.logger.debug('Chit-chat generated %d responses: %s', len(generated_sequences), '; '.join(generated_sequences))
         return list(generated_sequences)
 
 
@@ -80,14 +87,19 @@ if __name__ == '__main__':
     logging.basicConfig()
     logging.getLogger().setLevel(logging.ERROR)
 
-    confabulator = RugptPremiseConfabulator()
-    confabulator.load('/home/inkoziev/polygon/chatbot/tmp/rugpt_premise4question')
+    chitchat = RugptChitChat()
+    chitchat.load('/home/inkoziev/polygon/chatbot/tmp/rugpt_checkpoints')
 
+    context = []
     while True:
         q = input(':> ').strip()
         if q:
-            context = q
-            px = confabulator.generate_output(q)
-            for p in px:
-                print('{}'.format(p))
-            print('')
+            context.append(q)
+        else:
+            if context:
+                context = ' | '.join(context)
+                px = chitchat.generate_output(context)
+                for p in px:
+                    print('{}'.format(p))
+                print('')
+                context = []

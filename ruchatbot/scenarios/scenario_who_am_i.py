@@ -24,8 +24,6 @@ class Scenario_WhoAmI(Scenario):
         # Сколько раз бот попытался узнать у собеседника, кто он такой
         self.who_are_you_counter = 0
 
-        self.chitchat_questions_per_step_rate = 0
-
     def reset_usage_stat(self):
         super(Scenario_WhoAmI, self).reset_usage_stat()
         self.activation_counter = 0
@@ -224,6 +222,3 @@ class Scenario_WhoAmI(Scenario):
                 bot.say(session, self.choice(bot, session, text_utils, sx))
 
             bot.get_engine().exit_scenario(bot, session, interlocutor, interpreted_phrase)
-
-    def get_current_step_name(self):
-        return '<<<UNK>>>'

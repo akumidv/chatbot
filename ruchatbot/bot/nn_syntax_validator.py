@@ -4,7 +4,6 @@
 17-04-2021 добавлена проверка на повтор слов, чтобы детектировать типовую проблему генеративной seq2seq модели нтерпретатора
 """
 
-
 import os
 import json
 import logging
@@ -65,7 +64,7 @@ class NN_SyntaxValidator(ModelApplicator):
             return 0.0
 
         word2count = collections.Counter(words)
-        if word2count.most_common(1)[1] >=4:
+        if word2count.most_common(1)[0][1] >=4:
             # Есть слово, которое повторено 4 и более раз
             return 0.0
 

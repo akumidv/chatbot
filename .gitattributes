@@ -1,0 +1,29 @@
+# Auto detect text files and perform LF normalization
+*                 text=auto
+
+# Source code
+*.py              text
+*.js              text
+*.json            text
+*.sh              text eol=lf
+
+# Docker
+Dockerfile        text
+
+# Documentation
+*.md              text
+*.txt             text
+
+# Text and examples
+*.csv             text
+*.pdf             binary
+.DS_Store         binary
+
+# Configs
+.gitattributes    text
+.gitconfig        text
+*.yaml            text
+*.yml             text
+
+# Archives
+*.zip             binary

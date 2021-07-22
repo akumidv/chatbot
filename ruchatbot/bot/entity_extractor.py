@@ -11,11 +11,22 @@ import itertools
 import random
 import pickle
 
-from keras.models import model_from_json
-import keras_contrib
-from keras_contrib.layers import CRF
-from keras_contrib.losses import crf_loss
-from keras_contrib.metrics import crf_viterbi_accuracy
+# from keras.models import model_from_json
+# import keras_contrib
+# from keras_contrib.layers import CRF
+# from keras_contrib.losses import crf_loss
+# from keras_contrib.metrics import crf_viterbi_accuracy
+
+# https://github.com/keras-team/keras-contrib/issues/519 migration
+# import tensorflow as tf
+# import tensorflow_addons as tfa
+#import keras_contrib
+# from keras_contrib.layers import CRF
+from tensorflow_addons.layers import CRF
+# from keras_contrib.losses import crf_loss
+# from tensorflow_addons.losses import ContrastiveLoss as crf_loss
+# from keras_contrib.metrics import crf_viterbi_accuracy
+# from tensorflow_addons.metrics import MeanMetricWrapper as crf_viterbi_accuracy
 
 from ruchatbot.utils.padding_utils import PAD_WORD, lpad_wordseq, rpad_wordseq
 

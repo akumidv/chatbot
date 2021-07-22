@@ -24,7 +24,7 @@ class PlainFileFaqStorage(BaseFaqStorage):
     def __load_entries(self):
         if not self.loaded:
             self.loaded = True
-            self.logger.info(u'Start loading QA entries from "%s"', self.path)
+            self.logger.info('Start loading QA entries from "%s"', self.path)
             with io.open(self.path, 'r', encoding='utf-8') as rdr:
                 for line in rdr:
                     line = line.strip()
@@ -74,13 +74,13 @@ class PlainFileFaqStorage(BaseFaqStorage):
                                 self.questions.append(question)
                                 self.answers.append(answer)
 
-            self.logger.info(u'{} QA entries loaded from {}'.format(len(self.questions), self.path))
+            self.logger.info('{} QA entries loaded from {}'.format(len(self.questions), self.path))
 
     def get_most_similar(self, question_str, similarity_detector, text_utils):
         assert question_str
         self.__load_entries()
 
-        question2 = u' '.join(text_utils.tokenize(question_str))
+        question2 = ' '.join(text_utils.tokenize(question_str))
         best_question, best_rel = similarity_detector.get_most_similar(question2,
                                                                        [(s, None, None) for s in self.questions],
                                                                        text_utils,

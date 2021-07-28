@@ -4,13 +4,13 @@
 """
 
 import logging.handlers
-
+import torch
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
 
 class RugptChitChat:
     def __init__(self):
-        self.device = "cpu"  # "cuda" #torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = None
         self.model = None
         self.logger = logging.getLogger('RugptChitChat')

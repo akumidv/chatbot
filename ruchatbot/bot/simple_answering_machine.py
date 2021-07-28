@@ -1261,7 +1261,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
                         generated_lines.extend(rx1)
 
                 res = self.gpt_post(generated_lines, bot, session, interlocutor,
-                                    last_phrase, prev_phrase, use_session_histor, phrase_types)
+                                    last_phrase, prev_phrase, use_session_history, phrase_types)
 
             except Exception as ex:
                 self.logger.error(ex)
@@ -1476,7 +1476,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
                    pass # TODO Если внешний сервис
 
                 res = self.gpt_post(generated_lines, bot, session, interlocutor,
-                         last_phrase, prev_phrase, use_session_histor, phrase_types)
+                         last_phrase, prev_phrase, use_session_history, phrase_types)
 
 
             except Exception as ex:

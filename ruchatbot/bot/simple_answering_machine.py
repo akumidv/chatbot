@@ -50,6 +50,7 @@ from ruchatbot.bot.discourse import Discourse
 from ruchatbot.bot.interlocutor_gender_detector import InterlocutorGenderDetector
 from ruchatbot.bot.rugpt_premise_confabulator import RugptPremiseConfabulator
 from ruchatbot.bot.rugpt_chitchat import RugptChitChat
+from ruchatbot.bot.rugpt3_dialogpt import DialoGPT3Ru
 
 
 def join_session_phrase(s1, s2):
@@ -115,6 +116,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
         self.discourse = Discourse()
 
         self.chitchat_config = None
+        self.dialogpt_config = None
 
         self.premise_not_found = None  # модель генерации реплик для вопросов, на которые бот не знает ответ
         #self.premise_not_found_count = 0  # сколько раз вызывалась модель premise_not_found
@@ -146,6 +148,9 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
         # 14-04-2021 Модель читчата inprocess
         self.chitchat = RugptChitChat()
         self.chitchat.load(os.path.join(models_folder, 'rugpt_checkpoints'))
+
+        self.dialogpt = DialoGPT3Ru()
+        self.dialogpt.load(os.path.join(models_folder, 'dialogptru_checkpoints'))
 
         self.premise_not_found = NoInformationModel()
         self.premise_not_found.load(rule_paths, models_folder, data_folder, constants, self.text_utils)
@@ -1163,6 +1168,15 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
             if chitchat_replicas:
                 generated_replicas.extend(chitchat_replicas)
 
+            # Используем DialoGPT3 модель
+            # Если timegap=0, то мы обрабатываем последнюю реплику собеседника.
+            self.logger.debug('Before calling query_dialogpt from generate_smalltalk_replica with "%s"  bot=%s interlocutor=%s', phrase, bot.get_bot_id(), interlocutor)
+            dialogpt_replicas = self.query_dialogpt(bot, session, interlocutor,
+                                                            last_phrase=phrase, prev_phrase=prev_phrase,
+                                                            use_session_history=False, phrase_types=phrase_types)
+            if dialogpt_replicas:
+                generated_replicas.extend(dialogpt_replicas)
+
 
         # Теперь среди подобранных реплик бота в generated_replicas выбираем
         # одну, учитывая их вес.
@@ -1246,133 +1260,224 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
                         self.logger.debug('Chitchat returned %d lines for bot=%s interlocutor=%s', len(rx1), bot.get_bot_id(), interlocutor)
                         generated_lines.extend(rx1)
 
-                if use_session_history:
-                    # 06-03-2021 Эксперимент с полным контекстом сессии
-                    hlines = []
+                res = self.gpt_post(generated_lines, bot, session, interlocutor,
+                                    last_phrase, prev_phrase, use_session_histor, phrase_types)
+
+            except Exception as ex:
+                self.logger.error(ex)
+
+        return res
+
+    def gpt_post(self, generated_lines, bot, session, interlocutor,
+                               last_phrase,
+                               prev_phrase=None,
+                               use_session_history=True,
+                               phrase_types=None):
+        res = []
+        if use_session_history:
+            # 06-03-2021 Эксперимент с полным контекстом сессии
+            hlines = []
+            for i, item in enumerate(session.conversation_history):
+                if item.is_bot_phrase:
+                    label = 'B'
+                else:
+                    label = 'H'
+                if len(hlines) == 0:
+                    hlines.append([label, item.raw_phrase])
+                else:
+                    last_label = hlines[-1][0]
+                    if last_label == label:
+                        hlines[-1][1] = join_session_phrase(hlines[-1][1], item.raw_phrase)
+                    else:
+                        hlines.append([label, item.raw_phrase])
+
+            if len(hlines) > 2:
+                # Берем последние несколько реплик
+                nlast = 10
+                if len(hlines) > nlast:
+                    hlines = hlines[-nlast:]
+
+                context = ' | '.join(z[1] for z in hlines)
+
+                if self.chitchat is not None:
+                    rx2 = self.chitchat.generate_output(context, num_return_sequences=10)
+                    generated_lines.extend(rx2)
+                elif self.chitchat_config is not None:
+                    qurl = self.chitchat_config.build_query_url(context)
+                    self.logger.debug('query_chitchat_service context="%s"  qurl="%s"  bot=%s interlocutor=%s',
+                                      context, qurl, bot.get_bot_id(), interlocutor)
+                    response = requests.get(qurl)
+                    # todo потом должен быть json
+                    if response.ok:
+                        rx2 = response.text.split('\n')
+                        self.logger.debug('Chitchat returned %d lines for bot=%s interlocutor=%s', len(rx2),
+                                          bot.get_bot_id(), interlocutor)
+                        generated_lines.extend(rx2)
+
+        if generated_lines:
+            ranked_lines = []
+            # all_session_phrases = session.get_all_phrases()
+            for rtext in generated_lines:
+                # 10.06.2021 подавляем реплики с формами местомения "вы"
+                rwords = self.text_utils.tokenize(rtext)
+                if any((w in rwords) for w in
+                       'вы вам вами вас ваш ваша ваше вашу вашей вашего ваших вашими'.split()):
+                    continue
+
+                # 10.06.2021 подавим не всегда нормальные реплики с "а ты"
+                for bad in ['а ты', 'а у тебя']:
+                    if bad + '?' in rtext or bad + ' ?' in rtext:
+                        continue
+
+                # Проверим, что такая реплика еще не использовалась в этой сессии.
+                if self.bot_replica_already_uttered(bot, session, rtext):
+                    continue
+
+                # 16-05-2021 Проверим, что пользователь не говорил недавно такую реплику с поправкой на грамматическое лицо.
+                rtext_u = self.interpreter.normalize_person(rtext, self.text_utils)
+                last_h_u = session.get_last_interlocutor_utterance()
+                is_too_similar_2_h = False
+                if last_h_u is not None:
+                    for s1 in [rtext_u, rtext]:
+                        for s2 in [last_h_u.raw_phrase, last_h_u.interpretation]:
+                            if s2 is not None:
+                                if self.jsyndet.calc_synonymy2(s1, s2, self.text_utils) > 0.85:
+                                    self.logger.debug(
+                                        'Chitchat phrase "%s" is rejected due to similarity to interlocutor phrase "%s", bot=%s interlocutor=%s',
+                                        rtext, s2, bot.get_bot_id(), interlocutor)
+                                    is_too_similar_2_h = True
+                                    break
+
+                if is_too_similar_2_h:
+                    continue
+
+                # Прежде чем проверять реплику, сгенерированную читчатом, надо ее раскрыть до полной клаузы.
+                rtext_expanded = rtext
+                req_interpret = self.req_interpretation.require_interpretation(rtext, self.text_utils)
+                if req_interpret:
+                    context_phrases = []
+
+                    context_phrases.append(context.split('|')[-1].strip())
+                    context_phrases.append(rtext)
+                    rtext_expanded = self.interpreter.interpret(context_phrases, self.text_utils)
+
+                if not rtext.endswith('?'):
+                    # Надо проверять, что утверждение, сгенерированное читчатом, не противоречит имеющейся в базе
+                    # знаний информации
+                    contradictory_fact = self.find_contradictory_fact(rtext_expanded, bot, session,
+                                                                      interlocutor)
+                    if contradictory_fact:
+                        self.logger.debug(
+                            'Chitchat phrase "%s" is rejected due to contradiction with KB fact "%s", bot=%s interlocutor=%s',
+                            rtext,
+                            contradictory_fact, bot.get_bot_id(), interlocutor)
+                        continue
+                else:
+                    # для вопроса, сгенерированного чит-чатом, надо проверить, что мы еще не знаем ответа
+                    # на этот вопрос
+                    if self.does_bot_know_answer(rtext_expanded, bot, session, interlocutor):
+                        self.logger.debug('Chitchat phrase "%s" is rejected because bot knows the answer',
+                                          rtext_expanded)
+                        continue
+
+                # Валидация синтаксиса языковой моделью
+                p_syntax = self.syntax_validator.is_valid(rtext_expanded, self.text_utils)
+
+                if p_syntax < 0.5:
+                    self.logger.debug('query_chitchat_service produced invalid response text="%s" p_syntax=%f',
+                                      rtext, p_syntax)
+
+                if self.text_utils.contains_name(rtext):
+                    self.logger.debug('query_chitchat_service produced response with name text="%s"', rtext)
+                    continue
+
+                # Взвешиваем по контексту
+                p_discourse = self.calc_discourse_relevance(rtext, session)
+
+                # Составные предложения (несколько клауз) будем штрафовать
+                t_chars = collections.defaultdict(int)
+                for c in rtext[:-1]:
+                    t_chars[c] += 1
+                nb_clauses = t_chars['.'] + t_chars['?'] + t_chars['!']
+                p_clauses = math.exp(-nb_clauses)
+
+                p_line = p_syntax * p_discourse * p_clauses
+                ranked_lines.append((rtext, p_line))
+
+            if ranked_lines:
+                ranked_lines = sorted(ranked_lines, key=lambda z: -z[1])
+                best_line = ranked_lines[0][0]
+                best_p = ranked_lines[0][1]
+                self.logger.debug('query_chitchat_service response: best_line="%s" best_p=%f', best_line,
+                                  best_p)
+                res.append((best_line, best_p, 'query_chitchat_service'))
+
+        return res
+
+    def query_dialogpt(self, bot, session, interlocutor,
+                               last_phrase,
+                               prev_phrase=None,
+                               use_session_history=True,
+                               phrase_types=None):
+        res = []
+
+        print('#simple_answering_machine.py -> query_dialogpt:', last_phrase, prev_phrase, use_session_history,
+              phrase_types)
+
+        if self.dialogpt or self.dialogpt_config:
+            try:
+                if False:
+                    # НАЧАЛО ОТЛАДКИ
+                    self.logger.debug(
+                        '============================= SESSION bot=%s interlocutor=%s ============================',
+                        bot.get_bot_id(), interlocutor)
                     for i, item in enumerate(session.conversation_history):
                         if item.is_bot_phrase:
                             label = 'B'
                         else:
                             label = 'H'
-                        if len(hlines) == 0:
-                            hlines.append([label, item.raw_phrase])
+                        self.logger.debug('%2d| %s: - %s', i, label, item.raw_phrase)
+                    self.logger.debug('============================= END OF SESSION ============================')
+
+                # Если последняя фраза проинтерпретирована и есть пред. реплика бота - добавляем в контекст эту реплику бота
+                # Если последняя фраза проинтерпретирована и нет пред. реплики бота - берем результат интерпретации
+                context = last_phrase.raw_phrase
+                if Jaccard_SynonymyDetector.jaccard(last_phrase.interpretation, last_phrase.raw_phrase,
+                                                    3) < 0.95 or len(last_phrase.interpretation) < 10:
+                    # фраза проинтерпретирована.
+                    if use_session_history:
+                        last_bot_phrase = session.get_last_bot_utterance()
+                        if last_bot_phrase is not None:
+                            context = last_bot_phrase.raw_phrase + ' | ' + last_phrase.raw_phrase # TODO сохранять с весами ? и добавить больше длины в диалоги?
+                    else:
+                        # История недоступна, поэтому берем результат интерпретации фразы и денормализуем грам. лицо
+                        context = []
+                        if prev_phrase is not None:
+                            context.append(prev_phrase.raw_phrase)
+
+                        context.append(self.interpreter.denormalize_person(last_phrase.interpretation, self.text_utils))
+                        context = ' | '.join(context)
+
+                generated_lines = []
+
+                if self.dialogpt is not None:
+                    rx1 = self.dialogpt.generate_output(context, num_return_sequences=20)
+                    if phrase_types is None:
+                        generated_lines.extend(rx1)
+                    else:
+                        if phrase_types == 'q':
+                            for r in rx1:
+                                if not any((c not in r) for c in '.;,?'):
+                                    generated_lines.append(r)
                         else:
-                            last_label = hlines[-1][0]
-                            if last_label == label:
-                                hlines[-1][1] = join_session_phrase(hlines[-1][1], item.raw_phrase)
-                            else:
-                                hlines.append([label, item.raw_phrase])
+                            raise NotImplementedError()
 
-                    if len(hlines) > 2:
-                        # Берем последние несколько реплик
-                        nlast = 10
-                        if len(hlines) > nlast:
-                            hlines = hlines[-nlast:]
+                elif self.dialogpt_config is not None:
+                   pass # TODO Если внешний сервис
 
-                        context = ' | '.join(z[1] for z in hlines)
+                res = self.gpt_post(generated_lines, bot, session, interlocutor,
+                         last_phrase, prev_phrase, use_session_histor, phrase_types)
 
-                        if self.chitchat is not None:
-                            rx2 = self.chitchat.generate_output(context, num_return_sequences=10)
-                            generated_lines.extend(rx2)
-                        elif self.chitchat_config is not None:
-                            qurl = self.chitchat_config.build_query_url(context)
-                            self.logger.debug('query_chitchat_service context="%s"  qurl="%s"  bot=%s interlocutor=%s', context, qurl, bot.get_bot_id(), interlocutor)
-                            response = requests.get(qurl)
-                            # todo потом должен быть json
-                            if response.ok:
-                                rx2 = response.text.split('\n')
-                                self.logger.debug('Chitchat returned %d lines for bot=%s interlocutor=%s', len(rx2), bot.get_bot_id(), interlocutor)
-                                generated_lines.extend(rx2)
-
-                if generated_lines:
-                    ranked_lines = []
-                    #all_session_phrases = session.get_all_phrases()
-                    for rtext in generated_lines:
-                        # 10.06.2021 подавляем реплики с формами местомения "вы"
-                        rwords = self.text_utils.tokenize(rtext)
-                        if any((w in rwords) for w in 'вы вам вами вас ваш ваша ваше вашу вашей вашего ваших вашими'.split()):
-                            continue
-
-                        # 10.06.2021 подавим не всегда нормальные реплики с "а ты"
-                        for bad in ['а ты', 'а у тебя']:
-                            if bad+'?' in rtext or bad+' ?' in rtext:
-                                continue
-
-                        # Проверим, что такая реплика еще не использовалась в этой сессии.
-                        if self.bot_replica_already_uttered(bot, session, rtext):
-                            continue
-
-                        # 16-05-2021 Проверим, что пользователь не говорил недавно такую реплику с поправкой на грамматическое лицо.
-                        rtext_u = self.interpreter.normalize_person(rtext, self.text_utils)
-                        last_h_u = session.get_last_interlocutor_utterance()
-                        is_too_similar_2_h = False
-                        if last_h_u is not None:
-                            for s1 in [rtext_u, rtext]:
-                                for s2 in [last_h_u.raw_phrase, last_h_u.interpretation]:
-                                    if s2 is not None:
-                                        if self.jsyndet.calc_synonymy2(s1, s2, self.text_utils) > 0.85:
-                                            self.logger.debug('Chitchat phrase "%s" is rejected due to similarity to interlocutor phrase "%s", bot=%s interlocutor=%s', rtext, s2, bot.get_bot_id(), interlocutor)
-                                            is_too_similar_2_h = True
-                                            break
-
-                        if is_too_similar_2_h:
-                            continue
-
-                        # Прежде чем проверять реплику, сгенерированную читчатом, надо ее раскрыть до полной клаузы.
-                        rtext_expanded = rtext
-                        req_interpret = self.req_interpretation.require_interpretation(rtext, self.text_utils)
-                        if req_interpret:
-                            context_phrases = []
-
-                            context_phrases.append(context.split('|')[-1].strip())
-                            context_phrases.append(rtext)
-                            rtext_expanded = self.interpreter.interpret(context_phrases, self.text_utils)
-
-                        if not rtext.endswith('?'):
-                            # Надо проверять, что утверждение, сгенерированное читчатом, не противоречит имеющейся в базе
-                            # знаний информации
-                            contradictory_fact = self.find_contradictory_fact(rtext_expanded, bot, session, interlocutor)
-                            if contradictory_fact:
-                                self.logger.debug(
-                                    'Chitchat phrase "%s" is rejected due to contradiction with KB fact "%s", bot=%s interlocutor=%s', rtext,
-                                    contradictory_fact, bot.get_bot_id(), interlocutor)
-                                continue
-                        else:
-                            # для вопроса, сгенерированного чит-чатом, надо проверить, что мы еще не знаем ответа
-                            # на этот вопрос
-                            if self.does_bot_know_answer(rtext_expanded, bot, session, interlocutor):
-                                self.logger.debug('Chitchat phrase "%s" is rejected because bot knows the answer', rtext_expanded)
-                                continue
-
-                        # Валидация синтаксиса языковой моделью
-                        p_syntax = self.syntax_validator.is_valid(rtext_expanded, self.text_utils)
-
-                        if p_syntax < 0.5:
-                            self.logger.debug('query_chitchat_service produced invalid response text="%s" p_syntax=%f', rtext, p_syntax)
-
-                        if self.text_utils.contains_name(rtext):
-                            self.logger.debug('query_chitchat_service produced response with name text="%s"', rtext)
-                            continue
-
-                        # Взвешиваем по контексту
-                        p_discourse = self.calc_discourse_relevance(rtext, session)
-
-                        # Составные предложения (несколько клауз) будем штрафовать
-                        t_chars = collections.defaultdict(int)
-                        for c in rtext[:-1]:
-                            t_chars[c] += 1
-                        nb_clauses = t_chars['.'] + t_chars['?'] + t_chars['!']
-                        p_clauses = math.exp(-nb_clauses)
-
-                        p_line = p_syntax * p_discourse * p_clauses
-                        ranked_lines.append((rtext, p_line))
-
-                    if ranked_lines:
-                        ranked_lines = sorted(ranked_lines, key=lambda z: -z[1])
-                        best_line = ranked_lines[0][0]
-                        best_p = ranked_lines[0][1]
-                        self.logger.debug('query_chitchat_service response: best_line="%s" best_p=%f', best_line, best_p)
-                        res.append((best_line, best_p, 'query_chitchat_service'))
 
             except Exception as ex:
                 self.logger.error(ex)
@@ -1990,6 +2095,17 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
                     return True
 
             session.order_not_handled()
+            if self.dialogpt:
+                self.logger.debug(
+                    'Before calling query_dialogpt_service from process_order with "%s"  bot=%s interlocutor=%s',
+                    interpreted_phrase.interpretation, bot.get_bot_id(), interlocutor)
+                dialogpt_replicas = self.query_dialogpt(bot, session, interlocutor, interpreted_phrase)
+                if dialogpt_replicas:
+                    # TODO: выбирать наиболее уместную в текущем контексте реплику из DialoGPT и/или читчата
+                    answer = dialogpt_replicas[0][0]
+                    bot.say(session, answer)
+                    return True
+
             if self.chitchat_config:
                 self.logger.debug(
                     'Before calling query_chitchat_service from process_order with "%s"  bot=%s interlocutor=%s',
@@ -2272,6 +2388,20 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
                     chitchat_replicas = self.query_chitchat_service(bot, session, interlocutor, interpreted_phrase)
                     if chitchat_replicas:
                         answer = chitchat_replicas[0][0]
+
+
+                do_query_dialogpt = True if self.dialogpt else False
+                # if self.premise_not_found_count > 1:
+                #    if random.random() > math.exp(-self.premise_not_found_count):
+                #        do_query_dialogpt = True
+
+                if do_query_dialogpt:
+                    self.logger.debug(
+                        'Before calling query_dialogpt_service from build_answers0 with "%s"  bot=%s interlocutor=%s',
+                        interpreted_phrase.interpretation, bot.get_bot_id(), interlocutor)
+                    dialogpt_replicas = self.query_dialogpt(bot, session, interlocutor, interpreted_phrase) # TODO меньше ответов генерировать?
+                    if dialogpt_replicas:
+                        answer = dialogpt_replicas[0][0] # TODO выбор лучшего ответа из  ответа читчата тоже(!)
 
                 if answer is None:
                     answer = self.premise_not_found.generate_answer(interpreted_phrase.interpretation,

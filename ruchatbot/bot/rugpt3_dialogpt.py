@@ -124,9 +124,13 @@ class DialoGPT3Ru:
             print(f"===> Error generate: ", e)
             # return {'inputs': '', 'outputs': '', 'status': False, 'msg': f"{str(e)}"}
 
-        outputs = [self.tokenizer.decode(x, skip_special_tokens=True) for x in outputs_token_ids]
-        outputs = [x.split('|')[-1] for x in outputs]
-        print('#rugpt_chitchat.py -> generate_output -> output_sequences: ПРИМЕРЫ', outputs)
+        # TODO проверить. Если включать skip_special_tokens, то вместо
+        #  |0|1|меня зовут вася|1|2|Вася, как к Вам можно обращаться? Я могу на ты или на вы? |0-|Здравствуйте! Мне 29 лет. Есть сын 7 лет, 4 месяца назад я узнала, что беременна. Я стала спрашивать у мужа
+        # Дает только вторую часть Здравствуйте! Мне 29 лет. Есть сын 7 лет, 4 месяца назад я узнала, что беременна. Я стала спрашивать у мужа, что
+        # Хотя первая лучше(!) и правильно отвечат на первый вопрос,а не продложает вторую фразу(!)
+        # outputs = [self.tokenizer.decode(x, skip_special_tokens=True) for x in outputs_token_ids]
+        # outputs = [x.split('|')[-1] for x in outputs]
+        # print('#rugpt_chitchat.py -> generate_output -> output_sequences: ПРИМЕРЫ', outputs)
 
         output_sequences = outputs_token_ids
         # Remove the batch dimension when returning multiple sequences
@@ -143,31 +147,28 @@ class DialoGPT3Ru:
 
             # Decode text
             text = self.tokenizer.decode(generated_sequence, clean_up_tokenization_spaces=True)
-            print(generated_sequence_idx, "RUGPT text", text)
 
             # Remove all text after the stop token
             if stop_token in text:
                 text = text[: text.find(stop_token)]
-            print(generated_sequence_idx, "RUGPT after  stop_token", text)
 
             # Add the prompt at the beginning of the sequence. Remove the excess text that was used for pre-processing
             total_sequence = text[len(self.tokenizer.decode(encoded_prompt[0], clean_up_tokenization_spaces=True)):]
-            print(generated_sequence_idx, "RUGPT total_sequence", total_sequence)
 
             if '#' in total_sequence:
                 total_sequence = total_sequence[: total_sequence.find('#')]
 
-            total_sequence = total_sequence.split('|')[-1] # TODO удалить, после изменения логики формирования структуры. Т.к. сейчас несовместимы
+            if '|' in total_sequence: # TODO удалить, после изменения логики формирования структуры. Т.к. сейчас несовместимы
+                # total_sequence = total_sequence.split('|')[-1]
+                total_sequence = total_sequence[: total_sequence.find('|')]
             total_sequence = total_sequence.strip()
             if '|' not in total_sequence:
                 generated_sequences.add(total_sequence)
-            #print(total_sequence)
+            print(generated_sequence_idx, "RUGPT total_sequence:", total_sequence)
 
         print('#rugpt_DialoGPT3Ru.py -> generate_output -> generated_sequences:', generated_sequences)
         self.logger.debug('DialoGPT3Ru generated %d responses: %s', len(generated_sequences), '; '.join(generated_sequences))
         return list(generated_sequences)
-
-
 
 if __name__ == '__main__':
     logging.basicConfig()

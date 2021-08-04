@@ -1464,6 +1464,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
 
                 if self.dialogpt is not None:
                     rx1 = self.dialogpt.generate_output(context, num_return_sequences=20)
+                    print('\n# сгенерированы RUGPT ответы', rx1)
                     if phrase_types is None:
                         generated_lines.extend(rx1)
                     else:

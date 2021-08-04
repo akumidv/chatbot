@@ -1264,6 +1264,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
                                     last_phrase, prev_phrase, use_session_history, phrase_types)
 
             except Exception as ex:
+                print('#err chitchat query_chitchat_service', ex)
                 self.logger.error(ex)
 
         return res
@@ -1274,6 +1275,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
                                use_session_history=True,
                                phrase_types=None):
         res = []
+        context = last_phrase.raw_phrase # AK FIX Error
         if use_session_history:
             # 06-03-2021 Эксперимент с полным контекстом сессии
             hlines = []
@@ -1477,11 +1479,10 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
 
                 res = self.gpt_post(generated_lines, bot, session, interlocutor,
                          last_phrase, prev_phrase, use_session_history, phrase_types)
-
-
             except Exception as ex:
+                print('### rudialog EROROR', ex)
                 self.logger.error(ex)
-
+        print('# rudialog возвращаем результат', res)
         return res
 
     def cancel_all_running_items(self, bot, interlocutor):
@@ -1496,6 +1497,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
     def reset_usage_stat(self):
         self.paraphraser.reset_usage_stat()
 
+    # ОСНОВНОЕ ГЕНЕРАТОР ТЕКСТА
     def push_phrase(self, bot, interlocutor, phrase, internal_issuer=False, force_question_answering=False):
         assert(isinstance(phrase, str))
         self.logger.info('push_phrase "%s" to bot "%s" from interlocutor "%s"', phrase, bot.get_bot_id(), interlocutor)
@@ -1541,6 +1543,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
         # так что мы можем раскрыть анафору, подставить в явном виде опущенные составляющие и т.д.,
         # определить, является ли фраза вопросом, фактом или императивным высказыванием.
         interpreted_phrases = self.interpret_phrase(bot, session, question, internal_issuer)
+        print('# 1 push_phrase # вопрос ',question, 'интерпретированная фраза', interpreted_phrases)
 
         # 08.01.2021 Добавляем в историю полную входную фразу собеседника. После интерпретации она может
         # оказаться разбита на несколько сегментов (клауз), и каждый из сегментов породит несколько ответных
@@ -1550,6 +1553,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
         else:
             input_phrase = self.interpret_phrase0(bot, session, question, question, internal_issuer)
         session.add_phrase_to_history(input_phrase)
+        print('# 2 push_phrase # добавляем фразу ', input_phrase)
 
         if session.count_interlocutor_phrases() == 1:
             # Первая реплика собеседника в этой сессии!
@@ -1576,6 +1580,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
             # Только последняя клауза должна выдывать наружу какие-то ответные реплики.
             # Все предыдущие клаузы обрабатываются молча - сохраняют факты в БД, например.
             is_last_clause = iclause == len(interpreted_phrases)
+            print('# is_last_clause Только последняя клауза должна выдывать наружу', is_last_clause)
 
             # Удалим все накопившиеся реплики на выдачу.
             purged_replies = session.purge_bot_phrases()
@@ -1702,6 +1707,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
             insteadof_rule_result = None
             was_running_session = False
 
+            print('#3 session.get_status() обработки правил и формы', session.get_status())
             if not input_processed and session.get_status():
                 was_running_session = True
                 if not interpreted_phrase.is_question:
@@ -1817,7 +1823,8 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
 
                             if question_answered:
                                 return
-
+            print('#4 фраза имератив? приказ', interpreted_phrase.is_imperative, 'или вопрос', interpreted_phrase.is_question,
+                  'добавление факта', interpreted_phrase.is_assertion)
             self.discourse.process_interrogator_phrase(bot, session, interpreted_phrase)
             if interpreted_phrase.is_imperative:
                 self.logger.debug('Processing as imperative: "%s" bot=%s interlocutor=%s', interpreted_phrase.interpretation, bot.get_bot_id(), interlocutor)
@@ -1839,7 +1846,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
                     order_processed = True
             elif interpreted_phrase.is_question or is_question2:
                 self.logger.debug('Processing as question: "%s" bot=%s interlocutor=%s', interpreted_phrase.interpretation, bot.get_bot_id(), interlocutor)
-
+                print('# 5 Обрабобтка вопроса# , есть скрипт', bot.has_scripting())
                 replica = None
                 input_processed = False
 
@@ -1860,7 +1867,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
                                                                           interlocutor,
                                                                           interpreted_phrase)
                         input_processed = insteadof_rule_result.is_any_applied()
-
+                print('# 6 input_processed (обрботка сценария) или правила если нет', input_processed)
                 if not input_processed:
                     answers = []
                     if is_last_clause:
@@ -1896,6 +1903,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
                                 if is_last_clause:
                                     self.say(bot, session, replica)
                             replica = None
+                    print('# 7 результирующий набор ответов', answers)
             elif interpreted_phrase.is_assertion:
                 if is_last_clause:
                     # Теперь генерация реплики для случая, когда реплика собеседника - не-вопрос.
@@ -2157,6 +2165,7 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
         p_enough = self.enough_premises.is_enough(premise_str_list=[],
                                                   question_str=interpreted_phrase.interpretation,
                                                   text_utils=self.text_utils)
+        print('#0 build_answers0 если > 0.5 ответ достаточно', p_enough)
         if p_enough > 0.5:
             # Единственный ответ можно построить без предпосылки, например для вопроса "Сколько будет 2 плюс 2?"
             self.logger.debug('Building answer without a premise for question="%s"  bot=%s interlocutor=%s',
@@ -2184,6 +2193,8 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
                                                                                  memory_phrases,
                                                                                  self.text_utils,
                                                                                  nb_results=3)
+
+            print('#1 build_answers0 определяем наиболее релевантную предпосылку', memory_phrases, best_premises, best_rels)
             #if self.trace_enabled:
             if best_rels[0] >= self.min_premise_relevancy:
                 self.logger.info('Best premise for "%s" is "%s" with relevancy=%f  bot=%s interlocutor=%s', interpreted_phrase.interpretation, best_premises[0], best_rels[0], bot.get_bot_id(), interlocutor)
@@ -2415,7 +2426,9 @@ class SimpleAnsweringMachine(BaseAnsweringMachine):
         return answers, answer_rels
 
     def build_answers(self, session, bot, interlocutor, interpreted_phrase):
+        print('# 0  build_answers готовим ответ на фразу', interpreted_phrase)
         answers, answer_confidenses = self.build_answers0(session, bot, interlocutor, interpreted_phrase)
+        print('# 1  build_answers ответы', answers)
         if len(answer_confidenses) == 0 or max(answer_confidenses) < self.min_premise_relevancy:
             # тут нужен алгоритм генерации ответа в условиях, когда
             # у бота нет нужных фактов. Это может быть как ответ "не знаю",

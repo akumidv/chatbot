@@ -22,7 +22,7 @@ class DialoGPT3Ru:
 
     def load(self, model_name_or_path):
         print('#rugpt_chitchat.py -> load:', model_name_or_path)
-        self.device = "cpu"  # "cuda" #torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+        self.device = "cpu" #torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
         self.model = AutoModelForCausalLM.from_pretrained(model_name_or_path)
@@ -44,12 +44,12 @@ class DialoGPT3Ru:
 
     def generate_output(self, context, num_return_sequences=10):
         print('#rugpt_chitchat.py -> generate_output:', num_return_sequences, context)
-        self.logger.debug('Generating chit-chat response with context=%s', context)
+        self.logger.debug('Generating DialoGPT3Ru response with context=%s', context)
 
         nspaces = context.count(' ') # TODO AK наверное лучше считать по токенам
         if nspaces == 0:
             # По однословным контекстам не будем генерировать отклик.
-            print(f'#rugpt_chitchat.py -> generate_output: однословный контекст {nspaces}. пропускаем GPT')
+            print(f'#rugpt3_DialoGPT3Ru.py -> generate_output: однословный контекст {nspaces}. пропускаем GPT')
             return []
 
         # prompt_text = context + ' |'
@@ -126,12 +126,15 @@ class DialoGPT3Ru:
 
         outputs = [self.tokenizer.decode(x, skip_special_tokens=True) for x in outputs_token_ids]
         outputs = [x.split('|')[-1] for x in outputs]
-        print('#rugpt_chitchat.py -> generate_output -> output_sequences:', outputs)
+        print('#rugpt_chitchat.py -> generate_output -> output_sequences: ПРИМЕРЫ', outputs)
 
-        output_sequences = outputs
+        output_sequences = outputs_token_ids
         # Remove the batch dimension when returning multiple sequences
-        if len(output_sequences.shape) > 2:
-            output_sequences.squeeze_()
+        try:
+            if len(output_sequences.shape) > 2:
+                output_sequences.squeeze_()
+        except Exception as e:
+            print(f"===> RUGPT Error generate: TODO(!) взять из GPT3ru обработку", e)
 
         generated_sequences = set()
         for generated_sequence_idx, generated_sequence in enumerate(output_sequences):
@@ -140,24 +143,28 @@ class DialoGPT3Ru:
 
             # Decode text
             text = self.tokenizer.decode(generated_sequence, clean_up_tokenization_spaces=True)
+            print(generated_sequence_idx, "RUGPT text", text)
 
             # Remove all text after the stop token
             if stop_token in text:
                 text = text[: text.find(stop_token)]
+            print(generated_sequence_idx, "RUGPT after  stop_token", text)
 
             # Add the prompt at the beginning of the sequence. Remove the excess text that was used for pre-processing
             total_sequence = text[len(self.tokenizer.decode(encoded_prompt[0], clean_up_tokenization_spaces=True)):]
+            print(generated_sequence_idx, "RUGPT total_sequence", total_sequence)
 
             if '#' in total_sequence:
                 total_sequence = total_sequence[: total_sequence.find('#')]
 
+            total_sequence = total_sequence.split('|')[-1] # TODO удалить, после изменения логики формирования структуры. Т.к. сейчас несовместимы
             total_sequence = total_sequence.strip()
             if '|' not in total_sequence:
                 generated_sequences.add(total_sequence)
             #print(total_sequence)
 
-        print('#rugpt_chitchat.py -> generate_output -> generated_sequences:', '; '.generated_sequences)
-        self.logger.debug('Chit-chat generated %d responses: %s', len(generated_sequences), '; '.join(generated_sequences))
+        print('#rugpt_DialoGPT3Ru.py -> generate_output -> generated_sequences:', generated_sequences)
+        self.logger.debug('DialoGPT3Ru generated %d responses: %s', len(generated_sequences), '; '.join(generated_sequences))
         return list(generated_sequences)
 
 
@@ -166,7 +173,7 @@ if __name__ == '__main__':
     logging.basicConfig()
     logging.getLogger().setLevel(logging.ERROR)
 
-    chitchat = RugptChitChat()
+    chitchat = DialoGPT3Ru()
     chitchat.load('/home/inkoziev/polygon/chatbot/tmp/rugpt_checkpoints')
 
     context = []
